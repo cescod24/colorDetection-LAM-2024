@@ -3,7 +3,7 @@ import numpy as np
 from PIL import Image
 import math
 
-cap = cv2.VideoCapture(0)
+cap = cv2.VideoCapture(1)
 imgPicker = np.zeros((200,400,3), np.uint8)
 
 width = 3448  # Larghezza desiderata
@@ -22,6 +22,12 @@ actual_fps = cap.get(cv2.CAP_PROP_FPS)
 height_cut = 800
 width_cut = 1328
 
+poleUp = 200
+poleDown = 600
+
+hitUp = 60
+hitDown = 748
+
 print(f"Risoluzione impostata: {width}x{height}")
 print(f"FPS impostati: {fps}")
 print(f"Risoluzione effettiva: {actual_width}x{actual_height}")
@@ -37,7 +43,8 @@ colorHSVMax = np.array([[[0,0,0]]], np.uint8)
 
 points = []
 speeds = []
-scarto = 5
+scarto = 15
+raggioDisco = 50 
 pixelSize = 0.00026 # m/px
 
 def changeHSVMin(x):
@@ -200,17 +207,13 @@ def calculateSpeed(center_x, center_y, oldCenter_x, frame): #da guardare
     return 0
 
 def predictTrajectory(center_x, center_y, oldCenter_x, frame): #trendline source: https://classroom.synonym.com/calculate-trendline-2709.html
-    
-    goal_x, goal_y = None, None
-    
-    if(center_x < oldCenter_x + scarto):
+
+
+    if (center_x < oldCenter_x + scarto):
 
         points.clear()
     else:
-
-        points.append((center_x, center_y))
-    
-    oldCenter_x = center_x
+        points.append([center_x, center_y])
 
     if len(points) > 1:
 
@@ -219,7 +222,6 @@ def predictTrajectory(center_x, center_y, oldCenter_x, frame): #trendline source
         sum_y = 0
         sumSquare_x = 0
 
-        #n:
         n = len(points)
 
         for point in points:
@@ -238,11 +240,21 @@ def predictTrajectory(center_x, center_y, oldCenter_x, frame): #trendline source
         x = width
         y = int(m * (x - center_x) + center_y) #considerare che si lavora in (x→+, y↓+)
         q = (center_y - m * center_x)
+        
+        if hitUp > center_y > hitDown:
 
-        cv2.line(frame, (0, int(q)), (x, y), ( 0, 0, 255), 5)
+            print('rimbalzo')
+            for point in points:
+
+                if  hitUp > center_y:
+                    point[1] = -point[1]
+                else: #hitDown < center_y
+                    point[1] = height - point[1] + height             
     
         if 0 <= y <= height:
             rebounding = False
+            cv2.line((center_x, center_y), (x, y), (0, 255, 0), 5)
+            return x, y 
         else:
             rebounding = True
 
@@ -253,12 +265,12 @@ def predictTrajectory(center_x, center_y, oldCenter_x, frame): #trendline source
             if firstHit == True:
 
                 if m < 0:
-                    bounce_x = int(-q / m)
-                    bounce_y = 0
+                    bounce_x = int(-q / m) - raggioDisco
+                    bounce_y = 0 + raggioDisco
                 else: # m>0
-                    bounce_x = int((height - q) / m)
-                    bounce_y = height
-                    cv2.line(frame, (center_x, center_y), (bounce_x, bounce_y), (0, 255, 0), 5)
+                    bounce_x = int((height - q) / m) - raggioDisco
+                    bounce_y = height - raggioDisco
+                cv2.line(frame, (center_x, center_y), (bounce_x, bounce_y), (0, 255, 0), 5)
 
                 firstHit = False
 
@@ -266,37 +278,54 @@ def predictTrajectory(center_x, center_y, oldCenter_x, frame): #trendline source
             q = (bounce_y - m * bounce_x)
 
             if m < 0:
-                bounce_x1 = int(-q / m)
-                bounce_y1 = 0
+                bounce_x1 = int(-q / m) - raggioDisco
+                bounce_y1 = 0 + raggioDisco
             else: # m>0
-                bounce_x1 = int((height - q) / m)
-                bounce_y1 = height
-
-            if bounce_x1 >= width: #bounce_xy1 diventano il goal
-                bounce_x1 = width
-                bounce_y1 = int((m * bounce_x1 + q))
-                rebounding = False
+                bounce_x1 = int((height - q) / m) - raggioDisco
+                bounce_y1 = height - raggioDisco
 
             try:
+
+                print(f'bounce_X1, bounce_Y1   = {bounce_x1, bounce_y1}')
                 cv2.line(frame, (bounce_x, bounce_y), (bounce_x1, bounce_y1), (255, 0, 0), 5)
             except UnboundLocalError:
-
                 print("Unbound Local Error: passed to the next iteration")
                 pass
+            except TypeError:
+                print("Type error: passed to the next iteration")
+                pass
+
+            if bounce_x1 >= width - raggioDisco: #bounce_xy1 diventano il goal
+
+                if poleUp < bounce_y1 < poleDown:
+
+                    bounce_x1 = width 
+                    bounce_y1 = int((m * bounce_x1 + q))
+
+                    try:
+                        print(f' goal at ({bounce_x1}, {bounce_y1})') if bounce_x1 != None and bounce_y1 != None else (x, y)
+                    except UnboundLocalError:
+                        print("Unbound Local Error: passed to the next iteration")
+                        pass
+
+                else:
+                    print(f'no goal ma muro destro')
+                    bounce_x1 = width - raggioDisco
+                    bounce_y1 = int((m * bounce_x1 + q)) + raggioDisco if m > 0 else int((m * bounce_x1 + q)) - raggioDisco
+
+                rebounding = False
+
+                return bounce_x1, bounce_y1 if bounce_x1 != None and bounce_y1 != None else (x, y)
+            
+            if bounce_x or bounce_y or bounce_x1 or bounce_y1 < 0:
+
+                print("Errore: coordinate negative")
+                return 1
+            
             
             bounce_x, bounce_y = bounce_x1, bounce_y1
-
-        else: #disegna la linea principale
-            cv2.line(frame, (center_x, center_y), (x, y), (0, 255, 0), 5)
-
-        try:
-            print(f' goal at ({bounce_x1}, {bounce_y1})') if bounce_x1 != None and bounce_y1 != None else (x, y)
-            return bounce_x1, bounce_y1 if bounce_x1 != None and bounce_y1 != None else (x, y)
-        except UnboundLocalError:
-            print("Unbound Local Error: passed to the next iteration")
-            pass
     
-    return 1
+    return 0
 
 def draw_points(frame):
     for point in points:
@@ -342,14 +371,15 @@ def main():
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 3)
             cv2.circle(frame, (center_x, center_y), 10, (255, 0, 0), -1)
 
-        if len(points) == 0: 
-            oldCenter_x = 0
+            if len(points) == 0: 
+                oldCenter_x = 0
 
-        #calculateSpeed(center_x, center_y, oldCenter_x, frame)
-        predictTrajectory(center_x, center_y, oldCenter_x, frame)
-        draw_points(frame)
+            #calculateSpeed(center_x, center_y, oldCenter_x, frame)
+            predictTrajectory(center_x, center_y, oldCenter_x, frame)
+            draw_points(frame)
 
-        oldCenter_x = center_x
+            oldCenter_x = center_x
+
 
 
         cv2.imshow('result', result)
@@ -357,7 +387,7 @@ def main():
         cv2.imshow('color picker', imgPicker)
 
         
-        if cv2.waitKey(50) & 0xFF == ord('q'):
+        if cv2.waitKey(30) & 0xFF == ord('q'):
             break
     
     cap.release()
@@ -369,7 +399,7 @@ if __name__ == "__main__":
 #######################################################################################################
 #                                                                                                     #
 #                                                                                                     #
-# Robotica 2024-2025                                                                              #
+# Robotica 2024-2025                                                                                  #
 #                                                                                                     #                                                                                           #
 # Last edit: 13.8.2024 - 16:40                                                                        #
 #                                                                                                     #
